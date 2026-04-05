@@ -59,7 +59,7 @@ async function hasNoResults(page) {
   return !!(await page.$("text=No Result Found"));
 }
 
-// 📊 estimativa total
+// 📊 estimativa
 async function getTotalLinksEstimate(context) {
   const page = await context.newPage();
 
@@ -69,20 +69,45 @@ async function getTotalLinksEstimate(context) {
     const totalPages = await getTotalPages(page);
     const firstCount = await countArticles(page);
 
-    const lastPageUrl = `${BASE_URL}?page=${totalPages - 1}`;
-    await page.goto(lastPageUrl, { waitUntil: "networkidle" });
+    const lastUrl = `${BASE_URL}?page=${totalPages - 1}`;
+    await page.goto(lastUrl, { waitUntil: "networkidle" });
     await page.waitForSelector("article");
 
     const lastCount = await countArticles(page);
 
-    const totalLinks =
-      (totalPages - 1) * firstCount + lastCount;
-
-    return { totalPages, totalLinks };
+    return (totalPages - 1) * firstCount + lastCount;
 
   } finally {
     await page.close();
   }
+}
+
+// 📦 cache válido
+async function getCachedLinks() {
+  if (!fs.existsSync(LINKS_FILE)) return null;
+
+  try {
+    const data = await fs.readJson(LINKS_FILE);
+    return Array.isArray(data) && data.length > 0 ? data : null;
+  } catch {
+    return null;
+  }
+}
+
+// 📁 index arquivos existentes
+function getDownloadedFiles(format) {
+  const dir = path.join(OUTPUT_DIR, format);
+
+  if (!fs.existsSync(dir)) return new Set();
+
+  const files = fs.readdirSync(dir);
+
+  return new Set(files.map(f => f.replace(/\.(html|pdf)$/, "")));
+}
+
+// 🧠 nome do arquivo
+function getFileName(link) {
+  return link.split("/").pop();
 }
 
 // 🚀 coleta página
@@ -108,14 +133,14 @@ async function scrapePage(context, pageNum) {
   }
 }
 
-// 🚀 coleta com progress bar
+// 🚀 coleta com progress
 async function collectAllLinks(context) {
   console.log(chalk.blue("\n🔎 Coletando links...\n"));
 
-  const { totalLinks } = await getTotalLinksEstimate(context);
+  const totalLinks = await getTotalLinksEstimate(context);
 
   const bar = new cliProgress.SingleBar({
-    format: "🔗 [{bar}] {percentage}% | {value}/{total} links"
+    format: "🔗 [{bar}] {percentage}% | {value}/{total}"
   });
 
   bar.start(totalLinks, 0);
@@ -160,30 +185,41 @@ async function collectAllLinks(context) {
 
 // 💾 HTML
 async function saveAsHTML(page, link) {
-  const fileName = link.split("/").pop() + ".html";
-  await fs.writeFile(`output/${fileName}`, await page.content());
+  const dir = path.join(OUTPUT_DIR, "html");
+  await fs.ensureDir(dir);
+
+  const file = path.join(dir, getFileName(link) + ".html");
+
+  await fs.writeFile(file, await page.content());
 }
 
-// 💾 PDF (conteúdo)
+// 💾 PDF
 async function saveAsPDF(page, link) {
-  const fileName = link.split("/").pop() + ".pdf";
+  const dir = path.join(OUTPUT_DIR, "pdf");
+  await fs.ensureDir(dir);
+
+  const file = path.join(dir, getFileName(link) + ".pdf");
 
   const content = await page.$eval("article", el => el.innerHTML);
 
   await page.setContent(content);
 
   await page.pdf({
-    path: `output/${fileName}`,
+    path: file,
     format: "A4"
   });
 }
 
-// 🚀 processamento com barra
+// 🚀 processamento
 async function processLinks(context, links, format, skipExisting) {
-  await fs.ensureDir(OUTPUT_DIR);
+  const downloaded = getDownloadedFiles(format);
+
+  if (downloaded.size > 0) {
+    console.log(`📁 ${downloaded.size} arquivos já existem`);
+  }
 
   const bar = new cliProgress.SingleBar({
-    format: "📦 [{bar}] {percentage}% | {value}/{total} arquivos"
+    format: "📦 [{bar}] {percentage}% | {value}/{total}"
   });
 
   bar.start(links.length, 0);
@@ -197,11 +233,9 @@ async function processLinks(context, links, format, skipExisting) {
       const page = await context.newPage();
 
       try {
-        const name = link.split("/").pop();
-        const ext = format === "pdf" ? "pdf" : "html";
-        const file = `output/${name}.${ext}`;
+        const name = getFileName(link);
 
-        if (skipExisting && fs.existsSync(file)) {
+        if (skipExisting && downloaded.has(name)) {
           done++;
           bar.update(done);
           return;
@@ -237,11 +271,14 @@ async function main() {
 
   let links = [];
 
-  if (fs.existsSync(LINKS_FILE)) {
-    const use = readline.question("📦 Usar cache? (y/n): ");
-    if (use === "y") {
-      links = await fs.readJson(LINKS_FILE);
-    }
+  const cached = await getCachedLinks();
+
+  if (cached) {
+    console.log(`📦 Cache encontrado: ${cached.length} links`);
+
+    const use = readline.question("Usar cache? (y/n): ");
+
+    if (use === "y") links = cached;
   }
 
   if (links.length === 0) {
@@ -249,19 +286,19 @@ async function main() {
     await fs.writeJson(LINKS_FILE, links, { spaces: 2 });
   }
 
-  console.log(chalk.green(`\n✅ Total de links: ${links.length}`));
+  console.log(`\n✅ Total: ${links.length}`);
 
   const formatChoice = readline.question("Formato (1=HTML, 2=PDF): ");
   const format = formatChoice === "2" ? "pdf" : "html";
 
   const skip =
-    readline.question("📁 Pular existentes? (y/n): ") === "y";
+    readline.question("Pular existentes? (y/n): ") === "y";
 
-  console.log(chalk.blue("\n🚀 Processando...\n"));
+  console.log("\n🚀 Processando...\n");
 
   await processLinks(context, links, format, skip);
 
-  console.log(chalk.green("\n🎉 Finalizado!\n"));
+  console.log("\n🎉 Finalizado!\n");
 
   await browser.close();
 }
