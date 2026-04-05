@@ -34,7 +34,7 @@ async function countArticles(page) {
   return await page.$$eval("article", els => els.length);
 }
 
-// 🔥 scroll
+// 🔥 scroll (lazy load)
 async function autoScroll(page) {
   await page.evaluate(async () => {
     await new Promise((resolve) => {
@@ -54,12 +54,12 @@ async function autoScroll(page) {
   });
 }
 
-// 🛑 fim paginação
+// 🛑 detectar fim
 async function hasNoResults(page) {
   return !!(await page.$("text=No Result Found"));
 }
 
-// 📊 estimativa
+// 📊 estimativa REAL
 async function getTotalLinksEstimate(context) {
   const page = await context.newPage();
 
@@ -67,15 +67,15 @@ async function getTotalLinksEstimate(context) {
     await page.goto(BASE_URL, { waitUntil: "networkidle" });
 
     const totalPages = await getTotalPages(page);
-    const firstCount = await countArticles(page);
 
     const lastUrl = `${BASE_URL}?page=${totalPages - 1}`;
     await page.goto(lastUrl, { waitUntil: "networkidle" });
+
     await page.waitForSelector("article");
 
     const lastCount = await countArticles(page);
 
-    return (totalPages - 1) * firstCount + lastCount;
+    return (totalPages - 1) * 5 + lastCount;
 
   } finally {
     await page.close();
@@ -133,7 +133,7 @@ async function scrapePage(context, pageNum) {
   }
 }
 
-// 🚀 coleta com progress
+// 🚀 coleta com barra
 async function collectAllLinks(context) {
   console.log(chalk.blue("\n🔎 Coletando links...\n"));
 
@@ -211,13 +211,7 @@ async function saveAsPDF(page, link) {
 }
 
 // 🚀 processamento
-async function processLinks(context, links, format, skipExisting) {
-  const downloaded = getDownloadedFiles(format);
-
-  if (downloaded.size > 0) {
-    console.log(`📁 ${downloaded.size} arquivos já existem`);
-  }
-
+async function processLinks(context, links, format, downloaded, skipExisting) {
   const bar = new cliProgress.SingleBar({
     format: "📦 [{bar}] {percentage}% | {value}/{total}"
   });
@@ -291,12 +285,20 @@ async function main() {
   const formatChoice = readline.question("Formato (1=HTML, 2=PDF): ");
   const format = formatChoice === "2" ? "pdf" : "html";
 
-  const skip =
-    readline.question("Pular existentes? (y/n): ") === "y";
+  const downloaded = getDownloadedFiles(format);
+
+  let skip = false;
+
+  if (downloaded.size > 0) {
+    console.log(`📁 ${downloaded.size} arquivos já existem`);
+
+    skip =
+      readline.question("Pular existentes? (y/n): ") === "y";
+  }
 
   console.log("\n🚀 Processando...\n");
 
-  await processLinks(context, links, format, skip);
+  await processLinks(context, links, format, downloaded, skip);
 
   console.log("\n🎉 Finalizado!\n");
 
